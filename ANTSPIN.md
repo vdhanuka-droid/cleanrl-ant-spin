@@ -1,13 +1,20 @@
-# AntSpin-v0: teaching the MuJoCo Ant to spin upright
+# AntSpin: teaching the MuJoCo Ant to spin upright in place
 
 Custom Gymnasium environment on top of CleanRL ([vwxyzjn/cleanrl@fe8d8a0](https://github.com/vwxyzjn/cleanrl/commit/fe8d8a0)),
 trained with PPO and SAC. This file lists the exact commands that reproduce the reported results.
+
+Two environment versions, both in `cleanrl/my_ant_env.py`:
+
+| Env id | Difference |
+|---|---|
+| `AntSpin-v0` | Spin reward + speed-based drift penalty; ends when tipped past 60° or torso z ∉ [0.2, 1.5] m. True metric: upright rotations per episode. |
+| `AntSpin-v1` | v0 + episode ends when the torso is > 1.5 m from its start; (dx, dy) offset from start appended to the observation (27 → 29 dims); true metric counts only upright rotations within 1.5 m. |
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `cleanrl/my_ant_env.py` | `AntSpinEnv` (subclass of Gymnasium `Ant-v4`) and its registration as `AntSpin-v0` |
+| `cleanrl/my_ant_env.py` | `AntSpinEnv` (subclass of Gymnasium `Ant-v4`) and its registration as `AntSpin-v0` / `AntSpin-v1` |
 | `cleanrl/ppo_continuous_action.py`, `cleanrl/sac_continuous_action.py` | CleanRL scripts; 5 added lines each (import + true-metric logging), see below |
 | `cleanrl/plot_antspin.py` | Learning-curve plots: per-seed lines, mean, 95% Student-t interval |
 | `antspin_sweep.sh` | Launches all 10 training runs |
@@ -31,11 +38,17 @@ All 10 runs (PPO 3M steps, SAC 1M steps, paired seeds 1–5), in parallel in a t
 ./antspin_sweep.sh antspin_sweep      # outputs in ./antspin_sweep/{runs,videos,logs,diag}
 ```
 
-Equivalently, each run on its own (seed `S` in 1..5), from the repo root:
+For AntSpin-v1, set the env id (and a separate tmux session):
 
 ```bash
-uv run python cleanrl/ppo_continuous_action.py --env-id AntSpin-v0 --seed S --total-timesteps 3000000 --capture-video
-uv run python cleanrl/sac_continuous_action.py --env-id AntSpin-v0 --seed S --total-timesteps 1000000 --capture-video
+ENV_ID=AntSpin-v1 SESSION=sweep_v2 ./antspin_sweep.sh antspin_sweep_v2
+```
+
+Equivalently, each run on its own (seed `S` in 1..5, `ENV` = `AntSpin-v0` or `AntSpin-v1`), from the repo root:
+
+```bash
+uv run python cleanrl/ppo_continuous_action.py --env-id ENV --seed S --total-timesteps 3000000 --capture-video
+uv run python cleanrl/sac_continuous_action.py --env-id ENV --seed S --total-timesteps 1000000 --capture-video
 ```
 
 All other hyperparameters are CleanRL's defaults. `ANTSPIN_DIAG_LOG=<file.csv>` (set by the sweep script) additionally
@@ -48,6 +61,8 @@ with video capture on. SAC runs on GPU nondeterministically, so curves match the
 
 ```bash
 uv run --with matplotlib python cleanrl/plot_antspin.py --runs-dir antspin_sweep/runs --out-dir figures
+uv run --with matplotlib python cleanrl/plot_antspin.py --env-id AntSpin-v1 --runs-dir antspin_sweep_v2/runs \
+    --out-dir figures_v1 --metric-name "upright rotations within 1.5 m per episode"
 ```
 
 Writes `figures/{episodic_return,true_metric_rotations}.{png,pdf,csv}` and prints final performance
