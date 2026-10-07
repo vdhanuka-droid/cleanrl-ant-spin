@@ -152,7 +152,10 @@ def main():
     p.add_argument("--env-id", default="AntSpin-v0")
     p.add_argument("--bin", type=int, default=25_000, help="env steps per bin (the only smoothing)")
     p.add_argument("--final-window", type=int, default=100_000)
+    p.add_argument("--metric-name", default="upright rotations per episode", help="true-metric wording for the plot")
     args = p.parse_args()
+    METRICS["charts/true_metric_rotations"] = (
+        "true_metric_rotations", f"Mean true performance: {args.metric_name}", args.metric_name[0].upper() + args.metric_name[1:])
     os.makedirs(args.out_dir, exist_ok=True)
     runs = load_runs(args.runs_dir, args.env_id)
     for algo in runs:

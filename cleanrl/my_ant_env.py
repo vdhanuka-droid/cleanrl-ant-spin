@@ -1,6 +1,11 @@
-"""AntSpin-v0: teach the MuJoCo Ant to spin in place about the vertical axis.
+"""AntSpin: teach the MuJoCo Ant to spin in place about the vertical axis.
 
-Import this module before calling gym.make("AntSpin-v0") so the register() call runs.
+AntSpin-v0: spin reward + speed-based drift penalty; ends when tipped past 60 deg or torso z leaves [0.2, 1.5].
+AntSpin-v1: v0 plus a hard "in place" rule: the episode also ends when the torso is more than 1.5 m (horizontally)
+            from its start, the true metric only counts rotations made within that radius, and the torso's (dx, dy)
+            offset from its start is appended to the observation (27 -> 29 dims) so the boundary is observable.
+
+Import this module before calling gym.make("AntSpin-v0") so the register() calls run.
 
 Diagnostics (off by default): set ANTSPIN_DIAG_LOG=/path/file.csv to append one row per episode end
 with the reason it ended, torso height and uprightness.
@@ -9,6 +14,7 @@ import os
 
 import numpy as np
 from gymnasium.envs.mujoco.ant_v4 import AntEnv
+from gymnasium.spaces import Box
 from gymnasium.envs.registration import register
 
 MAX_EPISODE_STEPS = 1000
@@ -29,7 +35,7 @@ def _upright_from_quat(quat):
 
 
 class AntSpinEnv(AntEnv):
-    def __init__(self, spin_weight=1.0, drift_weight=0.5, **kwargs):
+    def __init__(self, spin_weight=1.0, drift_weight=0.5, max_drift=None, observe_offset=False, **kwargs):
         # Default Ant ends episodes when torso z leaves [0.2, 1.0]. That ceiling cut off upright spinners that
         # hopped slightly, while an Ant on its back (z ~0.3) never terminated and learned to spin there.
         # So: raise the ceiling, and add an uprightness check in is_healthy below.
@@ -37,15 +43,34 @@ class AntSpinEnv(AntEnv):
         super().__init__(**kwargs)
         self._spin_weight = spin_weight
         self._drift_weight = drift_weight
+        self._max_drift = max_drift  # None: no radius limit (v0)
+        self._observe_offset = observe_offset
+        if observe_offset:
+            n = self.observation_space.shape[0] + 2
+            self.observation_space = Box(low=-np.inf, high=np.inf, shape=(n,), dtype=np.float64)
         self._prev_yaw = 0.0
         self._cumulative_yaw = 0.0  # for the TRUE metric
         self._t = 0
         self._diag_log = os.environ.get("ANTSPIN_DIAG_LOG")
 
+    def _offset_from_start(self):
+        # Start = the nominal spawn point init_qpos[:2], the same reference as info["distance_from_origin"].
+        return self.data.qpos[:2] - self.init_qpos[:2]
+
+    def _within_radius(self):
+        return self._max_drift is None or np.linalg.norm(self._offset_from_start()) <= self._max_drift
+
     @property
     def is_healthy(self):
         # Used by the parent for both termination and healthy_reward.
-        return super().is_healthy and _upright_from_quat(self.data.qpos[3:7]) >= MIN_UPRIGHT
+        upright = _upright_from_quat(self.data.qpos[3:7]) >= MIN_UPRIGHT
+        return super().is_healthy and upright and self._within_radius()
+
+    def _get_obs(self):
+        obs = super()._get_obs()
+        if self._observe_offset:
+            obs = np.concatenate([obs, self._offset_from_start()])
+        return obs
 
     def reset_model(self):
         obs = super().reset_model()
@@ -65,8 +90,9 @@ class AntSpinEnv(AntEnv):
         self._prev_yaw = yaw
         yaw_rate = delta_yaw / self.dt
 
-        # TRUE METRIC: signed full rotations completed while upright this episode (+ = counter-clockwise).
-        if _upright_from_quat(self.data.qpos[3:7]) >= MIN_UPRIGHT:
+        # TRUE METRIC: signed full rotations completed while upright (and, in v1, within the radius) this episode.
+        # Counter-clockwise is positive.
+        if _upright_from_quat(self.data.qpos[3:7]) >= MIN_UPRIGHT and self._within_radius():
             self._cumulative_yaw += delta_yaw
         rotations = self._cumulative_yaw / (2 * np.pi)
 
@@ -108,6 +134,8 @@ class AntSpinEnv(AntEnv):
             cause = "too_low"
         elif z > max_z:
             cause = "too_high"
+        elif not self._within_radius():
+            cause = "drifted"
         else:
             cause = "tipped"
         upright = _upright_from_quat(self.data.qpos[3:7])
@@ -130,3 +158,10 @@ for w in (1.0, 2.0, 3.0, 5.0):
         max_episode_steps=MAX_EPISODE_STEPS,
         kwargs={"spin_weight": w},
     )
+
+register(
+    id="AntSpin-v1",
+    entry_point=f"{__name__}:AntSpinEnv",
+    max_episode_steps=MAX_EPISODE_STEPS,
+    kwargs={"max_drift": 1.5, "observe_offset": True},
+)
